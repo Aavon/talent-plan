@@ -2,13 +2,9 @@ package main
 
 import (
 	"runtime"
-	// "sort"
+	"sort"
 	"sync"
 )
-
-// func merge(src []int64, m int) {
-
-// }
 
 func MergeSort(src []int64) {
 	// sort.Slice(src, func(i, j int) bool {
@@ -17,10 +13,14 @@ func MergeSort(src []int64) {
 	MultiHeapSort(src)
 }
 
+var subSelectCnt int
+
+// 方案1: 并发只进行最小堆初始化 -- 之后每次选择之后在调整 -- 并发优化效果不明显
+// 方案2: 并发完成子序列排序，记录每次选择元素的子序列游标 参考 https://github.com/cch123/talent-plan/blob/master/tidb/mergesort/mergesort.go
+// 方案3: 增加并发goroutine数，执行时间反而比NumCPU长一点点
 func MultiHeapSort(arr []int64) {
 	conc := runtime.NumCPU()
 	var wg sync.WaitGroup
-	wg.Add(conc)
 	subSize := len(arr) / conc
 	subHeaps := make([]*subHeap, 0)
 	for i := 0; i < conc; i++ {
@@ -31,18 +31,24 @@ func MultiHeapSort(arr []int64) {
 			end = len(arr)
 		}
 		subHeap.len = end - start
-		subHeap.data = make([]int64, subHeap.len)
-		copy(subHeap.data, arr[start:end])
-		subHeaps = append(subHeaps, &subHeap)
-		go BuildOne(&subHeap, &wg)
+		if subHeap.len > 0 {
+			wg.Add(1)
+			subSelectCnt++
+			subHeap.data = make([]int64, subHeap.len)
+			copy(subHeap.data, arr[start:end])
+			subHeaps = append(subHeaps, &subHeap)
+			go BuildOne(&subHeap, &wg)
+		}
 	}
 	wg.Wait()
+	BuildHeapSort(subHeaps, subSelectCnt)
 	var i int = 0
 	for {
 		selected, existed := SelectOne(subHeaps)
 		if existed {
 			arr[i] = selected
 			i++
+			SubAdjustDown(subHeaps, 0, subSelectCnt)
 		} else {
 			break
 		}
@@ -52,6 +58,7 @@ func MultiHeapSort(arr []int64) {
 type subHeap struct {
 	data []int64
 	len  int
+	s    int
 }
 
 func (s *subHeap) adjust(parent int) {
@@ -71,34 +78,26 @@ func (s *subHeap) adjust(parent int) {
 
 func BuildOne(s *subHeap, wg *sync.WaitGroup) {
 	// 初始化
-	for n := s.len/2 - 1; n >= 0; n-- {
-		s.adjust(n)
-	}
-	// sort.Slice(s.data, func(x, y int) bool { return s.data[x] < s.data[y] })
+	// for n := s.len/2 - 1; n >= 0; n-- {
+	// 	s.adjust(n)
+	// }
+	sort.Slice(s.data, func(x, y int) bool { return s.data[x] < s.data[y] })
 	wg.Done()
 }
 
 func SelectOne(arrs []*subHeap) (selected int64, existed bool) {
-	si := -1
-	for i, s := range arrs {
-		if s.len == 0 {
-			continue
-		}
-		if !existed || selected > s.data[0] {
-			selected = s.data[0]
-			si = i
-			existed = true
-		}
+	if arrs[0].len == 0 {
+		return
 	}
-	if si >= 0 {
-		arrs[si].data[0], arrs[si].data[arrs[si].len-1] = arrs[si].data[arrs[si].len-1], arrs[si].data[0]
-		arrs[si].len--
-		if arrs[si].len == 0 {
-			// remove
-			arrs[si], arrs[len(arrs)-1] = arrs[si], arrs[len(arrs)-1]
-		} else {
-			arrs[si].adjust(0)
-		}
+	selected = arrs[0].data[arrs[0].s]
+	existed = true
+	// arrs[0].data[0], arrs[0].data[arrs[0].len-1] = arrs[0].data[arrs[0].len-1], arrs[0].data[0]
+	arrs[0].len--
+	arrs[0].s++
+	if arrs[0].len == 0 {
+		// mark remove
+		arrs[0], arrs[subSelectCnt-1] = arrs[subSelectCnt-1], arrs[0]
+		subSelectCnt--
 	}
 	return
 }
@@ -123,11 +122,11 @@ func SubAdjustDown(arr []*subHeap, parent, total int) {
 		if c+1 < total &&
 			arr[c].len > 0 &&
 			arr[c+1].len > 0 &&
-			arr[c].data[0] > arr[c+1].data[0] {
+			arr[c].data[arr[c].s] > arr[c+1].data[arr[c+1].s] {
 			c++
 		}
 		// 没有子节点 || 满足最小堆 || len = 0为已删除的节点
-		if c >= total || arr[c].len == 0 || arr[parent].data[0] < arr[c].data[0] {
+		if c >= total || arr[c].len == 0 || arr[parent].data[arr[parent].s] < arr[c].data[arr[c].s] {
 			break
 		}
 		arr[parent], arr[c] = arr[c], arr[parent]
