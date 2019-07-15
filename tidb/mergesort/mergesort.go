@@ -10,7 +10,7 @@ func MergeSort(src []int64) {
 	// sort.Slice(src, func(i, j int) bool {
 	// 	return src[i] < src[j]
 	// })
-	MultiHeapSort(src)
+	MultiHeapSort4(src)
 }
 
 var subSelectCnt int
@@ -132,4 +132,62 @@ func SubAdjustDown(arr []*subHeap, parent, total int) {
 		arr[parent], arr[c] = arr[c], arr[parent]
 		parent = c
 	}
+}
+
+// 方案4: 子序列不使用堆（受核心数限制）
+func MultiHeapSort4(arr []int64) {
+	conc := runtime.NumCPU()
+	var wg sync.WaitGroup
+	subSize := len(arr) / conc
+	subHeaps := make([]*subHeap, 0)
+	for i := 0; i < conc; i++ {
+		subHeap := subHeap{}
+		start := i * subSize
+		end := start + subSize
+		if i == conc-1 {
+			end = len(arr)
+		}
+		subHeap.len = end - start
+		if subHeap.len > 0 {
+			wg.Add(1)
+			subSelectCnt++
+			subHeap.data = make([]int64, subHeap.len)
+			copy(subHeap.data, arr[start:end])
+			subHeaps = append(subHeaps, &subHeap)
+			go BuildOne(&subHeap, &wg)
+		}
+	}
+	wg.Wait()
+	var i int = 0
+	for {
+		selected, existed := SelectOne4(subHeaps)
+		if existed {
+			arr[i] = selected
+			i++
+		} else {
+			break
+		}
+	}
+}
+
+func SelectOne4(arrs []*subHeap) (selected int64, existed bool) {
+	if subSelectCnt == 0 {
+		return
+	}
+	var si int = -1
+	for i, sub := range arrs {
+		if sub.len == 0 {
+			continue
+		}
+		if !existed || sub.data[sub.s] < selected {
+			si = i
+			selected = sub.data[sub.s]
+			existed = true
+		}
+	}
+	if si >= 0 {
+		arrs[si].len--
+		arrs[si].s++
+	}
+	return
 }
